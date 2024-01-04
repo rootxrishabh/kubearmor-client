@@ -16,8 +16,12 @@ var uninstallCmd = &cobra.Command{
 	Short: "Uninstall KubeArmor from a Kubernetes Cluster",
 	Long:  `Uninstall KubeArmor from a Kubernetes Clusters`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		err := install.K8sUninstaller(client, uninstallOptions)
-		return err
+		if err := install.K8sUninstaller(client, uninstallOptions); err != nil {
+			if err := install.K8sLegacyUninstaller(client, uninstallOptions); err != nil {
+				return err
+			}
+		}
+		return nil
 	},
 }
 
@@ -27,4 +31,5 @@ func init() {
 	uninstallCmd.Flags().StringVarP(&uninstallOptions.Namespace, "namespace", "n", "", "If no namespace is specified, it defaults to all namespaces and deletes all KubeArmor objects across them.")
 	uninstallCmd.Flags().BoolVar(&uninstallOptions.Force, "force", false, "Force remove KubeArmor annotations from deployments. (Deployments might be restarted)")
 	uninstallCmd.Flags().BoolVar(&uninstallOptions.Verify, "verify", true, "Verify whether all KubeArmor resources are cleaned up or not")
+	uninstallCmd.Flags().BoolVar(&uninstallOptions.Legacy, "legacy", false, "Legacy uninstallation for kubearmor")
 }
