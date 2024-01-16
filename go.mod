@@ -2,7 +2,7 @@ module github.com/kubearmor/kubearmor-client
 
 go 1.21.4
 
-toolchain go1.21.5
+toolchain go1.21.6
 
 replace (
 	github.com/etcd-io/bbolt => go.etcd.io/bbolt v1.3.6
@@ -48,6 +48,7 @@ require (
 	github.com/kubearmor/KubeArmor/KubeArmor v0.0.0-20231216173200-e64ccb7fede8
 	github.com/kubearmor/KubeArmor/deployments v0.0.0-20231216173200-e64ccb7fede8
 	github.com/kubearmor/KubeArmor/pkg/KubeArmorController v0.0.0-20231216173200-e64ccb7fede8
+	github.com/kubearmor/KubeArmor/pkg/KubeArmorOperator v0.0.0-20240112163539-933047a4c5dd
 	github.com/onsi/ginkgo/v2 v2.13.0
 	github.com/onsi/gomega v1.30.0
 	helm.sh/helm/v3 v3.13.3

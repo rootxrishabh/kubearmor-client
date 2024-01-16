@@ -27,7 +27,7 @@ var installCmd = &cobra.Command{
 				return fmt.Errorf("error installing kubearmor in legacy mode: %v", err)
 			}
 		} else {
-			if err := install.K8sInstaller(client); err != nil {
+			if err := install.K8sInstaller(client, installOptions); err != nil {
 				return fmt.Errorf("error installing kubearmor: %v", err)
 			}
 		}
@@ -48,5 +48,5 @@ func init() {
 	installCmd.Flags().BoolVar(&installOptions.Save, "save", false, "Save KubeArmor Manifest ")
 	installCmd.Flags().BoolVar(&installOptions.Verify, "verify", true, "Verify whether all KubeArmor resources are created, running and also probes whether KubeArmor has armored the cluster or not")
 	installCmd.Flags().BoolVar(&installOptions.Local, "local", false, "Use Local KubeArmor Images (sets ImagePullPolicy to 'IfNotPresent') ")
-	installCmd.Flags().BoolVar(&installOptions.Legacy, "legacy", false, "Legacy installation for kubearmor")
+	installCmd.Flags().BoolVar(&installOptions.Legacy, "legacy", false, "Installs kubearmor in legacy mode if set to true")
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/fatih/color"
 	"sigs.k8s.io/yaml"
 
+	operatorClient "github.com/kubearmor/KubeArmor/pkg/KubeArmorOperator/client/clientset/versioned"
 	deployments "github.com/kubearmor/KubeArmor/deployments/get"
 	"github.com/kubearmor/kubearmor-client/k8s"
 	"github.com/kubearmor/kubearmor-client/probe"
@@ -37,7 +38,8 @@ import (
 	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/repo"
-	
+
+	Operatorv1 "github.com/kubearmor/KubeArmor/pkg/KubeArmorOperator/api/operator.kubearmor.com/v1"
 )
 
 // Options for karmor install
@@ -54,6 +56,51 @@ type Options struct {
 	Save           bool
 	Verify         bool
 	Legacy		 bool
+}
+
+func GetOperatorCR(namespace string, o Options) *Operatorv1.KubeArmorConfig{
+	return &Operatorv1.KubeArmorConfig{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "KubeArmorConfig",
+			APIVersion: "operator.kubearmor.com/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kubearmorconfig-default",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name": "kubearmorconfig",
+				"app.kubernetes.io/instance": "kubearmorconfig-default",
+				"app.kubernetes.io/part-of": "kubearmoroperator",
+				"app.kubernetes.io/managed-by": "kustomize",
+				"app.kubernetes.io/created-by": "kubearmoroperator",
+			},
+		},
+		Spec: Operatorv1.KubeArmorConfigSpec{
+			DefaultFilePosture:          "audit",
+			DefaultCapabilitiesPosture:  "audit",
+			DefaultNetworkPosture:       "audit",
+			DefaultVisibility:           "process,network",
+			KubeArmorImage:              Operatorv1.ImageSpec{
+				Image:           o.KubearmorImage,
+				ImagePullPolicy: "Always",
+			},
+			KubeArmorInitImage:          Operatorv1.ImageSpec{
+				Image:           o.InitImage,
+				ImagePullPolicy: "Always",
+			},
+			KubeArmorRelayImage:         Operatorv1.ImageSpec{
+				Image:           "kubearmor/kubearmor-relay-server",
+				ImagePullPolicy: "Always",
+			},
+			KubeArmorControllerImage:    Operatorv1.ImageSpec{
+				Image:           "kubearmor/kubearmor-controller",
+				ImagePullPolicy: "Always",
+			},
+			EnableStdOutLogs:            false,
+			EnableStdOutAlerts:          false,
+			EnableStdOutMsgs:            false,
+		},
+	}
 }
 
 var verify bool
@@ -199,7 +246,6 @@ func checkTerminatingPods(c *k8s.Client, ns string) int {
 func K8sLegacyInstaller(c *k8s.Client, o Options) error {
 	verify = o.Verify
 	var env string
-	// if o.Env.Auto {
 		env = k8s.AutoDetectEnvironment(c)
 		if env == "none" {
 			if o.Save {
@@ -208,10 +254,8 @@ func K8sLegacyInstaller(c *k8s.Client, o Options) error {
 			} else {
 				return errors.New("unsupported environment or cluster not configured correctly")
 			}
-		// }
 		printMessage("😄\tAuto Detected Environment : "+env, true)
 	} else {
-		// env = o.Env.Environment
 		printMessage("😄\tEnvironment : "+env, true)
 	}
 
@@ -578,7 +622,7 @@ func K8sLegacyInstaller(c *k8s.Client, o Options) error {
 }
 
 // K8sInstaller for karmor
-func K8sInstaller(c *k8s.Client) error {
+func K8sInstaller(c *k8s.Client, o Options) error {
 	namespace := "kubearmor"
 
 	settings := cli.New()
@@ -613,7 +657,7 @@ func K8sInstaller(c *k8s.Client) error {
 	}
 
 	values := map[string]interface{}{
-		"autoDeploy": true,
+		// "autoDeploy": true,
 	}
 
 	client := action.NewUpgrade(actionConfig)
@@ -663,7 +707,17 @@ func K8sInstaller(c *k8s.Client) error {
 			}
 			
 		}
-	}	
+	}
+	// Install the CR using operator clientset
+
+	operatorClientSet, err := operatorClient.NewForConfig(c.Config)
+	if err != nil {
+		return fmt.Errorf("failed to create operator client: %w", err)
+	}
+	if _, err := operatorClientSet.OperatorV1().KubeArmorConfigs(namespace).Create(context.Background(), GetOperatorCR(namespace, o), metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("failed to create KubeArmorConfig CR: %w", err)
+	}
+
 	return nil
 }
 
@@ -1074,6 +1128,15 @@ func K8sUninstaller(c *k8s.Client, o Options) error {
 		fmt.Println("failed to uninstall kubearmor-operator")
 		return err
 	}
+
+	operatorClientSet, err := operatorClient.NewForConfig(c.Config)
+	if err != nil {
+		return fmt.Errorf("failed to create operator client: %w", err)
+	}
+	if err := operatorClientSet.OperatorV1().KubeArmorConfigs(namespace).Delete(context.Background(), "kubearmorconfig-default", metav1.DeleteOptions{}); err != nil {
+		return fmt.Errorf("failed to delete KubeArmorConfig CR: %w", err)
+	}
+
 	return nil
 }
 
