@@ -18,12 +18,8 @@ var installCmd = &cobra.Command{
 	Short: "Install KubeArmor in a Kubernetes Cluster",
 	Long:  `Install KubeArmor in a Kubernetes Clusters`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// if err := installOptions.Env.CheckAndSetValidEnvironmentOption(cmd.Flag("env").Value.String()); err != nil {
-		// 	return fmt.Errorf("error in checking environment option: %v", err)
-		// }
 		if installOptions.Legacy {
 			if err := install.K8sLegacyInstaller(client, installOptions); err != nil {
-				uninstallOptions.Legacy = installOptions.Legacy
 				return fmt.Errorf("error installing kubearmor in legacy mode: %v", err)
 			}
 		} else {

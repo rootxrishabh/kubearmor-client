@@ -511,7 +511,8 @@ func ProbeRunningKubeArmorNodes(c *k8s.Client, o Options) ([]KubeArmorProbeData,
 }
 
 func readDataFromKubeArmor(c *k8s.Client, o Options, nodeName string) (KubeArmorProbeData, error) {
-	srcPath := "/tmp/karmorProbeData.cfg"
+	// The line below is creating problem in verify for helm installation
+	// srcPath := "/tmp/karmorProbeData.cfg"
 	pods, err := c.K8sClientset.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{
 		LabelSelector: "kubearmor-app=kubearmor",
 		FieldSelector: "spec.nodeName=" + nodeName,
@@ -520,7 +521,7 @@ func readDataFromKubeArmor(c *k8s.Client, o Options, nodeName string) (KubeArmor
 		return KubeArmorProbeData{}, fmt.Errorf("error occured while getting KubeArmor pods %s", err.Error())
 	}
 	reader, outStream := io.Pipe()
-	cmdArr := []string{"cat", srcPath}
+	cmdArr := []string{"cat", ""} // srcPath temporarily removed
 	req := c.K8sClientset.CoreV1().RESTClient().
 		Get().
 		Namespace(pods.Items[0].Namespace).
