@@ -6,6 +6,7 @@ package install
 
 import (
 	"context"
+	"io"
 	"path/filepath"
 
 	"errors"
@@ -64,6 +65,19 @@ type Options struct {
 
 func getOperatorCR(o Options) *Operatorv1.KubeArmorConfig {
 	ns := o.Namespace
+	if o.Tag != "" {
+		o.KubearmorImage = updateImageTag(o.KubearmorImage, o.Tag)
+		o.InitImage = updateImageTag(o.InitImage, o.Tag)
+		o.ControllerImage = updateImageTag(o.ControllerImage, o.Tag)
+		o.RelayImage = updateImageTag(o.RelayImage, o.Tag)
+	}
+
+	if o.ImageRegistry != "" {
+		o.KubearmorImage = UpdateImageRegistry(o.ImageRegistry, o.KubearmorImage)
+		o.InitImage = UpdateImageRegistry(o.ImageRegistry, o.InitImage)
+		o.ControllerImage = UpdateImageRegistry(o.ImageRegistry, o.ControllerImage)
+		o.RelayImage = UpdateImageRegistry(o.ImageRegistry, o.RelayImage)
+	}
 
 	var imagePullPolicy string = "Always"
 	if o.Local {
@@ -123,11 +137,11 @@ func getOperatorCR(o Options) *Operatorv1.KubeArmorConfig {
 				ImagePullPolicy: imagePullPolicy,
 			},
 			KubeArmorRelayImage: Operatorv1.ImageSpec{
-				Image:           "kubearmor/kubearmor-relay-server",
+				Image:           o.RelayImage,
 				ImagePullPolicy: imagePullPolicy,
 			},
 			KubeArmorControllerImage: Operatorv1.ImageSpec{
-				Image:           "kubearmor/kubearmor-controller",
+				Image:           o.ControllerImage,
 				ImagePullPolicy: imagePullPolicy,
 			},
 			EnableStdOutLogs:   false,
@@ -186,22 +200,45 @@ func printMessage(msg string, flag bool) int {
 	return 0
 }
 
-func checkPods(c *k8s.Client, o Options) {
+func checkPods(c *k8s.Client, o Options, i bool) {
 	stime := time.Now()
 	otime := stime.Add(600 * time.Second)
 	cursor := [4]string{"|", "/", "—", "\\"}
-
+	// Check snitch completion only for install
+	if i {
+		for {
+			time.Sleep(900 * time.Millisecond)
+			pods, _ := c.K8sClientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{LabelSelector: "kubearmor-app=kubearmor-snitch", FieldSelector: "status.phase==Succeeded"})
+			podno := len(pods.Items)
+			remaining := time.Until(otime).Round(time.Second)
+			fmt.Printf("\rℹ️\tWaiting for KubeArmor Snitch to run:  %s, estimated time remaining: %v", cursor[cursorcount], remaining)
+			cursorcount++
+			if cursorcount == len(cursor) {
+				cursorcount = 0
+			}
+			if podno > 0 {
+				fmt.Printf("\r🥳\tKubeArmor Snitch Deployed!             \n")
+				break
+			}
+			if !otime.After(time.Now()) {
+				fmt.Printf("\r⌚️\tCheck Incomplete due to Time-Out!                     \n")
+				break
+			}
+		}
+	}
 	for {
-		time.Sleep(900 * time.Millisecond)
 		pods, _ := c.K8sClientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{LabelSelector: "kubearmor-app=kubearmor", FieldSelector: "status.phase==Running"})
 		podno := len(pods.Items)
-		fmt.Printf("\rℹ️\tWaiting for KubeArmor Daemonset to run:  %s", cursor[cursorcount])
+		remaining := time.Until(otime).Round(time.Second)
+		fmt.Printf("\rℹ️\tWaiting for KubeArmor Daemonset to start:  %s, estimated time remaining: %v", cursor[cursorcount], remaining)
 		cursorcount++
 		if cursorcount == len(cursor) {
 			cursorcount = 0
 		}
 		if podno > 0 {
 			fmt.Printf("\r🥳\tKubeArmor Daemonset Deployed!             \n")
+			fmt.Printf("\r🥳\tDone Checking , ALL Services are running!             \n")
+			fmt.Printf("⌚️\tExecution Time : %s \n", time.Since(stime))
 			break
 		}
 		if !otime.After(time.Now()) {
@@ -842,16 +879,12 @@ func writeHelmManifests(manifests string, filename string, printYAML []interface
 
 // K8sInstaller using operator for karmor
 func K8sInstaller(c *k8s.Client, o Options) error {
+	var printYAML []interface{}
 	ns := o.Namespace
 	releaseName := "kubearmor-operator"
-
-	settings := cli.New()
-	settings.Debug = true
-	settings.SetNamespace(ns)
-
-	var printYAML []interface{}
-
 	kubearmorConfig := getOperatorCR(o)
+	settings := cli.New()
+	settings.SetNamespace(ns)
 
 	actionConfig := actionConfigInit(ns, settings)
 
@@ -880,8 +913,6 @@ func K8sInstaller(c *k8s.Client, o Options) error {
 	client := action.NewUpgrade(actionConfig)
 	client.Namespace = ns
 	client.Timeout = 5 * time.Minute
-	client.Wait = true
-	client.Install = true
 	if o.Save {
 		client.DryRun = true
 		client.SkipCRDs = true
@@ -896,22 +927,21 @@ func K8sInstaller(c *k8s.Client, o Options) error {
 	if err != nil {
 		return fmt.Errorf("failed to load Helm chart: %w", err)
 	}
-
+	log.SetOutput(io.Discard)
 	upgradeInstaller, err := client.Run(releaseName, chartRequested, nil)
+	log.SetOutput(os.Stdout)
 	if err != nil {
+		client.Install = true
 		if client.Install {
-			histClient := action.NewHistory(actionConfig)
-			histClient.Max = 1
-
 			clientInstall := action.NewInstall(actionConfig)
 			clientInstall.ReleaseName = releaseName
 			clientInstall.Namespace = ns
 			clientInstall.Timeout = 5 * time.Minute
-			clientInstall.Wait = true
 			clientInstall.CreateNamespace = true
 			if o.Save {
 				clientInstall.DryRun = true
 				clientInstall.SkipCRDs = true
+				clientInstall.ClientOnly = true
 			}
 
 			chartPath, err := clientInstall.ChartPathOptions.LocateChart("kubearmor/kubearmor-operator", settings)
@@ -924,7 +954,9 @@ func K8sInstaller(c *k8s.Client, o Options) error {
 				return fmt.Errorf("failed to load Helm chart: %w", err)
 			}
 
+			log.SetOutput(io.Discard)
 			installRunner, err := clientInstall.Run(chartRequested, nil)
+			log.SetOutput(os.Stdout)
 			if o.Save {
 				return writeHelmManifests(installRunner.Manifest, "kubearmor.yaml", printYAML, kubearmorConfig)
 			}
@@ -956,7 +988,7 @@ func K8sInstaller(c *k8s.Client, o Options) error {
 	}
 
 	if o.Verify && !o.Save {
-		checkPods(c, o)
+		checkPods(c, o, client.Install)
 	}
 
 	return err
@@ -1349,15 +1381,27 @@ func K8sLegacyUninstaller(c *k8s.Client, o Options) error {
 
 // K8sUninstaller for karmor uninstall
 func K8sUninstaller(c *k8s.Client, o Options) error {
-	ns := o.Namespace
+	var ns string
 
-	if _, err := c.K8sClientset.AppsV1().Deployments(ns).Get(context.Background(), "kubearmor-operator", metav1.GetOptions{}); err != nil {
-		fmt.Println("❌\tKubeArmor is either not installed, or the specified namespace is incorrect.\nℹ️\tPlease ensure you have installed KubeArmor, and check that you are specifying the correct namespace.\nℹ️\tAttempting legacy uninstallation.")
-		return err
+	if o.Namespace != "" {
+		pods, _ := c.K8sClientset.CoreV1().Pods(o.Namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: "kubearmor-app", FieldSelector: "status.phase==Running"})
+		if len(pods.Items) == 0 {
+			fmt.Println("❌\tKubeArmor is either not installed or you have specified incorrect namespace.\nℹ️\tPlease ensure you have installed KubeArmor or have specificed the correct namespace.")
+			return nil
+		}
+		ns = o.Namespace
+	} else {
+		if pods, _ := c.K8sClientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{LabelSelector: "kubearmor-app", FieldSelector: "status.phase==Running"}); len(pods.Items) == 0 {
+			fmt.Println("❌\tKubeArmor is not installed.\nℹ️\tPlease ensure you have installed KubeArmor.")
+			return nil
+		} else {
+			if len(pods.Items) > 0 {
+				ns = pods.Items[0].Namespace
+			}
+		}
 	}
 
 	settings := cli.New()
-	settings.Debug = true
 	settings.SetNamespace(ns)
 	settings.RESTClientGetter()
 
@@ -1371,9 +1415,12 @@ func K8sUninstaller(c *k8s.Client, o Options) error {
 	client.Timeout = 5 * time.Minute
 	client.DeletionPropagation = "background"
 
+	log.SetOutput(io.Discard)
 	_, err := client.Run("kubearmor-operator")
+	log.SetOutput(os.Stdout)
+
 	if err != nil {
-		fmt.Println("failed to uninstall kubearmor. Did you perform a legacy installation? If so, use `karmor uninstall --legacy=true.`")
+		fmt.Println("ℹ️  Helm release not found. Switching to legacy uninstaller.")
 		return err
 	}
 
@@ -1384,7 +1431,11 @@ func K8sUninstaller(c *k8s.Client, o Options) error {
 	if err := operatorClientSet.OperatorV1().KubeArmorConfigs(ns).Delete(context.Background(), "kubearmorconfig-default", metav1.DeleteOptions{}); err != nil {
 		return fmt.Errorf("failed to delete KubeArmorConfig CR: %w", err)
 	} else {
-		fmt.Println("❌\tKubeArmor removed")
+		fmt.Println("❌\tAll KubeArmor resources removed")
+	}
+
+	if o.Verify {
+		checkTerminatingPods(c, ns)
 	}
 
 	return nil
