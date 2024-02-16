@@ -50,6 +50,7 @@ type Options struct {
 	InitImage       string
 	KubearmorImage  string
 	ControllerImage string
+	OperatorImage   string
 	RelayImage      string
 	ImageRegistry   string
 	Tag             string
@@ -877,12 +878,37 @@ func writeHelmManifests(manifests string, filename string, printYAML []interface
 	return nil
 }
 
+func getOperatorConfig(o Options) map[string]interface{} {
+	var operatorImagePullPolicy string = "Always"
+	var opeartorImageTag string = "latest"
+
+	if o.Local {
+		operatorImagePullPolicy = "IfNotPresent"
+	}
+	if o.Tag != "" {
+		opeartorImageTag = o.Tag
+	}
+	if o.ImageRegistry != "" {
+		o.OperatorImage = o.ImageRegistry + "/" + o.OperatorImage
+	}
+	return map[string]interface{}{
+		"kubearmorOperator": map[string]interface{}{
+			"image": map[string]interface{}{
+				"repository": o.OperatorImage,
+				"tag":        opeartorImageTag,
+			},
+			"imagePullPolicy": operatorImagePullPolicy,
+		},
+	}
+}
+
 // K8sInstaller using operator for karmor
 func K8sInstaller(c *k8s.Client, o Options) error {
 	var printYAML []interface{}
 	ns := o.Namespace
 	releaseName := "kubearmor-operator"
 	kubearmorConfig := getOperatorCR(o)
+	values := getOperatorConfig(o)
 	settings := cli.New()
 	settings.SetNamespace(ns)
 
@@ -928,7 +954,7 @@ func K8sInstaller(c *k8s.Client, o Options) error {
 		return fmt.Errorf("failed to load Helm chart: %w", err)
 	}
 	log.SetOutput(io.Discard)
-	upgradeInstaller, err := client.Run(releaseName, chartRequested, nil)
+	upgradeInstaller, err := client.Run(releaseName, chartRequested, values)
 	log.SetOutput(os.Stdout)
 	if err != nil {
 		client.Install = true
@@ -955,7 +981,7 @@ func K8sInstaller(c *k8s.Client, o Options) error {
 			}
 
 			log.SetOutput(io.Discard)
-			installRunner, err := clientInstall.Run(chartRequested, nil)
+			installRunner, err := clientInstall.Run(chartRequested, values)
 			log.SetOutput(os.Stdout)
 			if o.Save {
 				return writeHelmManifests(installRunner.Manifest, "kubearmor.yaml", printYAML, kubearmorConfig)
