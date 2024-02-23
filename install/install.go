@@ -62,15 +62,30 @@ type Options struct {
 	Save            bool
 	Verify          bool
 	Legacy          bool
+	SkipDeploy      bool
+}
+
+var verify bool
+var progress int
+var cursorcount int
+
+func setPosture(option string, value string, posture *Operatorv1.PostureType, optionName string) {
+	if option == "all" || strings.Contains(option, value) {
+		*posture = Operatorv1.PostureType(optionName)
+	}
 }
 
 func getOperatorCR(o Options) *Operatorv1.KubeArmorConfig {
 	ns := o.Namespace
+	var defaultFilePosture Operatorv1.PostureType
+	var defaultCapabilitiesPosture Operatorv1.PostureType
+	var defaultNetworkPosture Operatorv1.PostureType
+
 	if o.Tag != "" {
-		o.KubearmorImage = updateImageTag(o.KubearmorImage, o.Tag)
-		o.InitImage = updateImageTag(o.InitImage, o.Tag)
-		o.ControllerImage = updateImageTag(o.ControllerImage, o.Tag)
-		o.RelayImage = updateImageTag(o.RelayImage, o.Tag)
+		o.KubearmorImage = updateImageTag(o.KubearmorImage, o.Tag, "kubearmor/kubearmor:stable")
+		o.InitImage = updateImageTag(o.InitImage, o.Tag, "kubearmor/kubearmor-init:stable")
+		o.ControllerImage = updateImageTag(o.ControllerImage, o.Tag, "kubearmor/kubearmor-controller:latest")
+		o.RelayImage = updateImageTag(o.RelayImage, o.Tag, "kubearmor/kubearmor-relay-server:latest")
 	}
 
 	if o.ImageRegistry != "" {
@@ -85,28 +100,12 @@ func getOperatorCR(o Options) *Operatorv1.KubeArmorConfig {
 		imagePullPolicy = "IfNotPresent"
 	}
 
-	var defaultFilePosture Operatorv1.PostureType
-	var defaultCapabilitiesPosture Operatorv1.PostureType
-	var defaultNetworkPosture Operatorv1.PostureType
-
-	if o.Audit == "all" || strings.Contains(o.Audit, "file") {
-		defaultFilePosture = "audit"
-	}
-	if o.Audit == "all" || strings.Contains(o.Audit, "network") {
-		defaultNetworkPosture = "audit"
-	}
-	if o.Audit == "all" || strings.Contains(o.Audit, "capabilities") {
-		defaultCapabilitiesPosture = "audit"
-	}
-	if o.Block == "all" || strings.Contains(o.Block, "file") {
-		defaultFilePosture = "block"
-	}
-	if o.Block == "all" || strings.Contains(o.Block, "network") {
-		defaultNetworkPosture = "block"
-	}
-	if o.Block == "all" || strings.Contains(o.Block, "capabilities") {
-		defaultCapabilitiesPosture = "block"
-	}
+	setPosture(o.Audit, "file", &defaultFilePosture, "audit")
+	setPosture(o.Audit, "network", &defaultNetworkPosture, "audit")
+	setPosture(o.Audit, "capabilities", &defaultCapabilitiesPosture, "audit")
+	setPosture(o.Block, "file", &defaultFilePosture, "block")
+	setPosture(o.Block, "network", &defaultNetworkPosture, "block")
+	setPosture(o.Block, "capabilities", &defaultCapabilitiesPosture, "block")
 
 	return &Operatorv1.KubeArmorConfig{
 		TypeMeta: metav1.TypeMeta{
@@ -151,10 +150,6 @@ func getOperatorCR(o Options) *Operatorv1.KubeArmorConfig {
 		},
 	}
 }
-
-var verify bool
-var progress int
-var cursorcount int
 
 func clearLine(size int) int {
 	for i := 0; i < size; i++ {
@@ -388,24 +383,28 @@ func UpdateImageRegistry(registry, image string) string {
 }
 
 // updateImageTag will update the tag of the image
-func updateImageTag(image, tag string) string {
-	// check if the image constains a tag
-	// if not, set it to latest
-	if !strings.Contains(image, ":") {
-		image = image + ":latest"
-	}
+func updateImageTag(image, tag, defaultImage string) string {
 	i := strings.Split(image, ":")
-	i[len(i)-1] = tag
+	if i[len(i)-1] != "" && image != defaultImage {
+		return image
+	} else {
+		// check if the image constains a tag
+		// if not, set it to latest
+		if !strings.Contains(image, ":") {
+			image = image + ":latest"
+		}
+		i[len(i)-1] = tag
+	}
 	return strings.Join(i, ":")
 }
 
 // K8sInstaller for karmor install
 func K8sLegacyInstaller(c *k8s.Client, o Options) error {
 	if o.Tag != "" {
-		o.KubearmorImage = updateImageTag(o.KubearmorImage, o.Tag)
-		o.InitImage = updateImageTag(o.InitImage, o.Tag)
-		o.ControllerImage = updateImageTag(o.ControllerImage, o.Tag)
-		o.RelayImage = updateImageTag(o.RelayImage, o.Tag)
+		o.KubearmorImage = updateImageTag(o.KubearmorImage, o.Tag, "kubearmor/kubearmor:stable")
+		o.InitImage = updateImageTag(o.InitImage, o.Tag, "kubearmor/kubearmor-init:stable")
+		o.ControllerImage = updateImageTag(o.ControllerImage, o.Tag, "kubearmor/kubearmor-controller:latest")
+		o.RelayImage = updateImageTag(o.RelayImage, o.Tag, "kubearmor/kubearmor-relay-server:latest")
 	}
 
 	if o.ImageRegistry != "" {
@@ -885,9 +884,17 @@ func getOperatorConfig(o Options) map[string]interface{} {
 	if o.Local {
 		operatorImagePullPolicy = "IfNotPresent"
 	}
-	if o.Tag != "" {
+
+	i := strings.Split(o.OperatorImage, ":")
+
+	// If the provided image has a tag different from o.Tag
+	if o.OperatorImage != "kubearmor/kubearmor-operator" {
+		o.OperatorImage = i[0]
+		opeartorImageTag = i[len(i)-1]
+	} else if o.Tag != "" {
 		opeartorImageTag = o.Tag
 	}
+
 	if o.ImageRegistry != "" {
 		o.OperatorImage = o.ImageRegistry + "/" + o.OperatorImage
 	}
@@ -910,7 +917,6 @@ func K8sInstaller(c *k8s.Client, o Options) error {
 	kubearmorConfig := getOperatorCR(o)
 	values := getOperatorConfig(o)
 	settings := cli.New()
-	settings.SetNamespace(ns)
 
 	actionConfig := actionConfigInit(ns, settings)
 
@@ -939,9 +945,9 @@ func K8sInstaller(c *k8s.Client, o Options) error {
 	client := action.NewUpgrade(actionConfig)
 	client.Namespace = ns
 	client.Timeout = 5 * time.Minute
+	client.Install = false
 	if o.Save {
 		client.DryRun = true
-		client.SkipCRDs = true
 	}
 
 	chartPath, err := client.ChartPathOptions.LocateChart("kubearmor/kubearmor-operator", settings)
@@ -966,7 +972,6 @@ func K8sInstaller(c *k8s.Client, o Options) error {
 			clientInstall.CreateNamespace = true
 			if o.Save {
 				clientInstall.DryRun = true
-				clientInstall.SkipCRDs = true
 				clientInstall.ClientOnly = true
 			}
 
@@ -998,26 +1003,31 @@ func K8sInstaller(c *k8s.Client, o Options) error {
 		fmt.Println("🛡\tUpgraded Kubearmor helm release : " + releaseName)
 	}
 
-	// Install the CR using operator clientset
-
 	operatorClientSet, err := operatorClient.NewForConfig(c.Config)
 	if err != nil {
 		return fmt.Errorf("failed to create operator client: %w", err)
 	}
-	if _, err := operatorClientSet.OperatorV1().KubeArmorConfigs(ns).Get(context.Background(), "kubearmorconfig-default", metav1.GetOptions{}); err == nil {
-		fmt.Println("ℹ️\tKubeArmorConfig already exists")
-	} else {
-		if _, err := operatorClientSet.OperatorV1().KubeArmorConfigs(ns).Create(context.Background(), kubearmorConfig, metav1.CreateOptions{}); err != nil {
-			return fmt.Errorf("failed to create KubeArmorConfig CR: %w", err)
+
+	if o.SkipDeploy {
+		yamlData, err := yaml.Marshal(kubearmorConfig)
+		if err != nil {
+			return fmt.Errorf("failed to marshal kubearmorConfig: %w", err)
 		}
-		fmt.Println("😄\tKubeArmorConfig Created")
+		fmt.Println("ℹ️\tSkipping KubeArmorConfig deployment")
+		fmt.Printf("--- kubearmorConfig dump:\n%s\n\n", string(yamlData))
+	} else {
+		if _, err := operatorClientSet.OperatorV1().KubeArmorConfigs(ns).Create(context.Background(), kubearmorConfig, metav1.CreateOptions{}); apierrors.IsAlreadyExists(err) {
+			fmt.Println("ℹ️\tKubeArmorConfig already exists")
+		} else {
+			fmt.Println("😄\tKubeArmorConfig Created")
+		}
 	}
 
-	if o.Verify && !o.Save {
+	if o.Verify && !o.Save && !o.SkipDeploy {
 		checkPods(c, o, client.Install)
 	}
 
-	return err
+	return nil
 }
 
 type patchStringValue struct {
@@ -1408,57 +1418,51 @@ func K8sLegacyUninstaller(c *k8s.Client, o Options) error {
 // K8sUninstaller for karmor uninstall
 func K8sUninstaller(c *k8s.Client, o Options) error {
 	var ns string
-
-	if o.Namespace != "" {
-		pods, _ := c.K8sClientset.CoreV1().Pods(o.Namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: "kubearmor-app", FieldSelector: "status.phase==Running"})
-		if len(pods.Items) == 0 {
-			fmt.Println("❌\tKubeArmor is either not installed or you have specified incorrect namespace.\nℹ️\tPlease ensure you have installed KubeArmor or have specificed the correct namespace.")
-			return nil
-		}
-		ns = o.Namespace
-	} else {
-		if pods, _ := c.K8sClientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{LabelSelector: "kubearmor-app", FieldSelector: "status.phase==Running"}); len(pods.Items) == 0 {
-			fmt.Println("❌\tKubeArmor is not installed.\nℹ️\tPlease ensure you have installed KubeArmor.")
-			return nil
-		} else {
-			if len(pods.Items) > 0 {
-				ns = pods.Items[0].Namespace
-			}
-		}
-	}
-
+	var kocName string = "kubearmorconfigs.operator.kubearmor.com"
 	settings := cli.New()
-	settings.SetNamespace(ns)
-	settings.RESTClientGetter()
 
-	actionConfig := new(action.Configuration)
-	if err := actionConfig.Init(settings.RESTClientGetter(), ns, os.Getenv("HELM_DRIVER"), log.Printf); err != nil {
-		log.Printf("%+v", err)
-		os.Exit(1)
+	actionConfig := actionConfigInit("", settings)
+	statusClient := action.NewStatus(actionConfig)
+	res, err := statusClient.Run("kubearmor-operator")
+	if err != nil {
+		fmt.Println("ℹ️  Helm release not found. Switching to legacy uninstaller.")
+		return err
 	}
+	ns = res.Namespace
 
+	actionConfig = actionConfigInit(ns, settings)
 	client := action.NewUninstall(actionConfig)
 	client.Timeout = 5 * time.Minute
 	client.DeletionPropagation = "background"
 
 	log.SetOutput(io.Discard)
-	_, err := client.Run("kubearmor-operator")
+	_, err = client.Run("kubearmor-operator")
 	log.SetOutput(os.Stdout)
-
 	if err != nil {
-		fmt.Println("ℹ️  Helm release not found. Switching to legacy uninstaller.")
+		fmt.Println("ℹ️  Error uninstalling through Helm. Switching to legacy uninstaller.")
 		return err
 	}
 
-	operatorClientSet, err := operatorClient.NewForConfig(c.Config)
-	if err != nil {
-		return fmt.Errorf("failed to create operator client: %w", err)
+	if o.Force {
+		operatorClientSet, err := operatorClient.NewForConfig(c.Config)
+		if err != nil {
+			return fmt.Errorf("failed to create operator clientset: %w", err)
+		}
+
+		fmt.Printf("❌\tRemoving CR kubearmorconfig-default\n")
+		if err := operatorClientSet.OperatorV1().KubeArmorConfigs(ns).Delete(context.Background(), "kubearmorconfig-default", metav1.DeleteOptions{}); apierrors.IsNotFound(err) {
+			fmt.Printf("CR %s not found\n", kocName)
+		}
+
+		fmt.Printf("❌\tRemoving CRD %s\n", kocName)
+		if err := c.APIextClientset.ApiextensionsV1().CustomResourceDefinitions().Delete(context.Background(), kocName, metav1.DeleteOptions{}); apierrors.IsNotFound(err) {
+			fmt.Printf("CRD %s not found\n", kocName)
+		}
+
+		removeAnnotations(c, ns)
 	}
-	if err := operatorClientSet.OperatorV1().KubeArmorConfigs(ns).Delete(context.Background(), "kubearmorconfig-default", metav1.DeleteOptions{}); err != nil {
-		return fmt.Errorf("failed to delete KubeArmorConfig CR: %w", err)
-	} else {
-		fmt.Println("❌\tAll KubeArmor resources removed")
-	}
+
+	fmt.Println("❌\tKubeArmor resources removed")
 
 	if o.Verify {
 		checkTerminatingPods(c, ns)
