@@ -79,7 +79,7 @@ func setPosture(option string, value string, posture *Operatorv1.PostureType, op
 	}
 }
 
-func getOperatorCR(o Options) *Operatorv1.KubeArmorConfig {
+func getOperatorCR(o Options) (*Operatorv1.KubeArmorConfig, string) {
 	ns := o.Namespace
 	var defaultFilePosture Operatorv1.PostureType
 	var defaultCapabilitiesPosture Operatorv1.PostureType
@@ -108,6 +108,17 @@ func getOperatorCR(o Options) *Operatorv1.KubeArmorConfig {
 	setPosture(o.Block, "file", &defaultFilePosture, "block")
 	setPosture(o.Block, "network", &defaultNetworkPosture, "block")
 	setPosture(o.Block, "capabilities", &defaultCapabilitiesPosture, "block")
+
+	postureSettings := ""
+	if defaultCapabilitiesPosture != "" {
+		postureSettings += " -defaultCapabilitiesPosture: " + string(defaultCapabilitiesPosture)
+	}
+	if defaultFilePosture != "" {
+		postureSettings += " -defaultFilePosture: " + string(defaultFilePosture)
+	}
+	if defaultNetworkPosture != "" {
+		postureSettings += " -defaultNetworkPosture: " + string(defaultNetworkPosture)
+	}
 
 	return &Operatorv1.KubeArmorConfig{
 		TypeMeta: metav1.TypeMeta{
@@ -150,7 +161,7 @@ func getOperatorCR(o Options) *Operatorv1.KubeArmorConfig {
 			EnableStdOutAlerts: false,
 			EnableStdOutMsgs:   false,
 		},
-	}
+	}, postureSettings
 }
 
 func clearLine(size int) int {
@@ -913,7 +924,7 @@ func K8sInstaller(c *k8s.Client, o Options) error {
 	var printYAML []interface{}
 	ns := o.Namespace
 	releaseName := "kubearmor-operator"
-	kubearmorConfig := getOperatorCR(o)
+	kubearmorConfig, postureSettings := getOperatorCR(o)
 	values := getOperatorConfig(o)
 	settings := cli.New()
 
@@ -1016,9 +1027,18 @@ func K8sInstaller(c *k8s.Client, o Options) error {
 		fmt.Printf("--- kubearmorConfig dump:\n%s\n\n", string(yamlData))
 	} else {
 		if _, err := operatorClientSet.OperatorV1().KubeArmorConfigs(ns).Create(context.Background(), kubearmorConfig, metav1.CreateOptions{}); apierrors.IsAlreadyExists(err) {
-			fmt.Println("ℹ️\tKubeArmorConfig already exists")
+			existingConfig, err := operatorClientSet.OperatorV1().KubeArmorConfigs(ns).Get(context.Background(), kubearmorConfig.Name, metav1.GetOptions{})
+			if err != nil {
+				fmt.Println("Failed to get existing KubeArmorConfig: %w", err)
+			}
+			kubearmorConfig.ResourceVersion = existingConfig.ResourceVersion
+			if _, err := operatorClientSet.OperatorV1().KubeArmorConfigs(ns).Update(context.Background(), kubearmorConfig, metav1.UpdateOptions{}); err != nil {
+				fmt.Println("Failed to update KubeArmorConfig: %w", err)
+			} else {
+				fmt.Println("😄\tKubeArmorConfig updated" + postureSettings)
+			}
 		} else {
-			fmt.Println("😄\tKubeArmorConfig Created")
+			fmt.Println("😄\tKubeArmorConfig created" + postureSettings)
 		}
 	}
 
